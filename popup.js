@@ -1,5 +1,8 @@
 const $ = (id) => document.getElementById(id);
 
+// 顯示目前載入的插件版號
+document.getElementById('ver').textContent = 'v' + chrome.runtime.getManifest().version;
+
 // 與 content.js 相同的 START_AT 解析
 function parseStartAt(startAt, preSec) {
   if (!startAt) return null;

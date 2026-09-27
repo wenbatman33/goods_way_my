@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MyWay 預約搶位",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "mywaygoods.com 自動選日期/最早場次、加入購物車、結帳並填入帳單資料",
   "permissions": [
     "storage",
