@@ -285,8 +285,11 @@
     const empty = qsaVisible('input[name="firstName"], input[name="lastName"], input[name="address1"], input[name="city"]').filter((el) => !el.value);
     if (empty.length) await log(`⚠️ 仍有 ${empty.length} 個必填欄位空白，請確認 .env`);
 
-    if (String(config.AUTO_COMPLETE_ORDER).toLowerCase() !== 'true') {
-      await log('✋ 已填完資料，AUTO_COMPLETE_ORDER=false，請手動按「完成訂單」');
+    // popup 勾選框優先，沒設定過才看 .env
+    const { autoComplete } = await chrome.storage.local.get('autoComplete');
+    const auto = autoComplete ?? String(config.AUTO_COMPLETE_ORDER).toLowerCase() === 'true';
+    if (!auto) {
+      await log('✋ 已填完資料，未勾選「自動按完成訂單」，請手動按「完成訂單」');
       await setState({ armed: false });
       return;
     }

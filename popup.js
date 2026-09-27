@@ -12,7 +12,9 @@ function parseStartAt(startAt, preSec) {
 }
 
 async function render() {
-  const { config = {}, state = {}, logs = [] } = await chrome.storage.local.get(['config', 'state', 'logs']);
+  const { config = {}, state = {}, logs = [], autoComplete } = await chrome.storage.local.get(['config', 'state', 'logs', 'autoComplete']);
+  // 未設定過勾選框時，沿用 .env 的 AUTO_COMPLETE_ORDER
+  $('autoComplete').checked = autoComplete ?? String(config.AUTO_COMPLETE_ORDER).toLowerCase() === 'true';
   const t = parseStartAt(config.START_AT, config.PRE_START_SECONDS);
   const left = t ? Math.round((t - Date.now()) / 1000) : null;
   $('status').textContent = state.armed
@@ -20,7 +22,7 @@ async function render() {
     : `⚪ 未啟動${state.stage === 'done' ? '（上次已完成）' : ''}`;
   $('cfg').textContent =
     `日期 ${config.TARGET_DATE || '-'}｜數量 ${config.QUANTITY || 1}｜輪詢 ${config.POLL_INTERVAL_MS || 1000}ms\n` +
-    `開賣 ${config.START_AT || '立即'}（提前 ${config.PRE_START_SECONDS || 0}s）｜自動完成訂單 ${config.AUTO_COMPLETE_ORDER}\n` +
+    `開賣 ${config.START_AT || '立即'}（提前 ${config.PRE_START_SECONDS || 0}s）\n` +
     `帳單 ${config.LAST_NAME || '?'}${config.FIRST_NAME || '?'}｜${config.CITY || ''}${config.ADDRESS1 || '(未填地址)'}`;
   $('logs').textContent = logs.join('\n');
   $('logs').scrollTop = 1e9;
@@ -48,6 +50,8 @@ $('reload').onclick = async () => {
   if (!r?.ok) alert(r?.error || '載入失敗');
   render();
 };
+
+$('autoComplete').onchange = (e) => chrome.storage.local.set({ autoComplete: e.target.checked });
 
 $('clearLog').onclick = async () => { await chrome.storage.local.set({ logs: [] }); render(); };
 
