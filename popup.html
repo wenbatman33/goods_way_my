@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 360px; font: 13px/1.5 -apple-system, "PingFang TC", sans-serif; margin: 12px; color: #222; }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  .row { display: flex; gap: 6px; margin: 8px 0; }
+  button { flex: 1; padding: 8px; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  #start { background: #0057d9; color: #fff; }
+  #stop { background: #e5484d; color: #fff; }
+  #reload, #clearLog { background: #eee; }
+  #status { padding: 6px 8px; border-radius: 6px; background: #f3f3f3; }
+  #cfg { font-size: 12px; color: #555; white-space: pre-wrap; }
+  #logs { height: 200px; overflow: auto; background: #111; color: #9f9; font: 11px/1.4 Menlo, monospace; padding: 6px; border-radius: 6px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+  <h1>MyWay 預約搶位</h1>
+  <div id="status">載入中…</div>
+  <div id="cfg"></div>
+  <div class="row"><button id="start">▶ 開始（待命）</button><button id="stop">■ 停止</button></div>
+  <div class="row"><button id="reload">重新載入 .env</button><button id="clearLog">清除日誌</button></div>
+  <div id="logs"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
