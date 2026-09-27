@@ -19,9 +19,24 @@
     const { state = {} } = await chrome.storage.local.get('state');
     await chrome.storage.local.set({ state: { ...state, ...patch } });
   }
+  // 頁面右上角狀態框
+  function banner(text) {
+    let el = document.getElementById('myway-booker-banner');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'myway-booker-banner';
+      el.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483647;max-width:340px;padding:10px 14px;' +
+        'background:rgba(0,40,110,.92);color:#fff;font:13px/1.5 -apple-system,"PingFang TC",sans-serif;' +
+        'border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.3);pointer-events:none;white-space:pre-wrap';
+      (document.body || document.documentElement).appendChild(el);
+    }
+    el.textContent = `🤖 MyWay 搶位\n${text}`;
+  }
+
   async function log(msg) {
     const line = `${new Date().toLocaleTimeString()} ${msg}`;
     console.log(TAG, line);
+    banner(line);
     const { logs = [] } = await chrome.storage.local.get('logs');
     logs.push(line);
     await chrome.storage.local.set({ logs: logs.slice(-80) });
@@ -61,19 +76,42 @@
     return res.json();
   }
 
-  // 首頁掃出所有商品連結，挑選日期選項含目標日期者
-  async function discoverHandle(targetMD, excluded = []) {
-    const html = await (await fetch(`/?_=${Date.now()}`, { cache: 'no-store' })).text();
-    const handles = [...new Set([...html.matchAll(/\/products\/([^"'?#/\s]+)/g)].map((m) => m[1]))];
+  // 從首頁 + 商品 sitemap 掃出所有商品，挑出（符合關鍵字且）日期選項含目標日期者
+  async function discoverHandle(targetMD, excluded = [], keyword = '') {
+    const sources = [`/?_=${Date.now()}`, `/sitemap_products_1.xml?_=${Date.now()}`];
+    if (location.pathname !== '/' && !location.pathname.startsWith('/products/')) sources.push(`${location.pathname}?_=${Date.now()}`);
+    const texts = await Promise.all(sources.map((u) => fetch(u, { cache: 'no-store' }).then((r) => r.text()).catch(() => '')));
+    const kw = keyword ? new RegExp(keyword, 'i') : null;
+    // 盯首頁的按鈕（COMING SOON 開放後會出現 href）與符合關鍵字的選單：連到分類頁/活動頁時，進去抓商品連結
+    for (const url of watchLinks(texts[0], kw)) {
+      texts.push(await fetch(url, { cache: 'no-store' }).then((r) => r.text()).catch(() => ''));
+    }
+    const handles = [...new Set(texts.flatMap((t) => [...t.matchAll(/\/products\/([^"'?#/\s<]+)/g)].map((m) => m[1])))];
     for (const h of handles) {
       if (excluded.includes(h)) continue;
       try {
         const p = await fetchProduct(h);
+        if (kw && !kw.test(`${p.title} ${decodeURIComponent(h)}`)) continue;
         const hit = p.variants.some((v) => [v.option1, v.option2, v.option3].some((o) => parseMD(o) === targetMD));
         if (hit) return h;
       } catch (_) { /* 略過 */ }
     }
     return null;
+  }
+
+  // 回傳首頁中「按鈕」或「符合關鍵字的連結」所指向、非首頁也非商品頁的網址
+  function watchLinks(html, kw) {
+    const out = new Set();
+    for (const m of html.matchAll(/<a\b([^>]*)>([\s\S]{0,600}?)<\/a>/g)) {
+      const attrs = m[1];
+      const text = m[2].replace(/<[^>]+>/g, ' ');
+      const href = (attrs.match(/href="([^"]+)"/) || [])[1];
+      if (!href || !href.startsWith('/') || /^\/(\?|$)/.test(href) || /^\/(products|policies|cart|account)/.test(href)) continue;
+      const isButton = /button-custom|COMING SOON|預約|RESERVE|BOOK/i.test(attrs + text);
+      const isKeyword = kw && kw.test(text + ' ' + attrs);
+      if (isButton || isKeyword) out.add(href);
+    }
+    return [...out].slice(0, 5);
   }
 
   // 找出日期選項與時段選項的位置（option1/2/3）
@@ -133,6 +171,35 @@
     return data;
   }
 
+  // ---------- 點擊模式：盯首頁按鈕 ----------
+  const btnPath = (a) => { try { return new URL(a.href, location.origin).pathname + new URL(a.href, location.origin).search; } catch (_) { return ''; } };
+  const mainButtons = () => [...document.querySelectorAll('main a, #MainContent a')].filter((a) => /button/i.test(a.className) || /COMING SOON|BOOKING|預約|RESERVE/i.test(a.textContent));
+  const btnKey = (a) => [...a.classList].find((c) => /^button-custom--/.test(c)) || a.textContent.trim();
+
+  // 開賣前記下：哪顆按鈕還是 COMING SOON（目標）、其他按鈕當下的連結（例如 A9，永不點）
+  async function recordBaseline() {
+    const btns = mainButtons();
+    if (!btns.length) return;
+    const targets = btns.filter((a) => a.getAttribute('aria-disabled') === 'true' || !a.getAttribute('href') || /COMING SOON/i.test(a.textContent)).map(btnKey);
+    const oldHrefs = btns.filter((a) => a.getAttribute('href') && a.getAttribute('aria-disabled') !== 'true').map(btnPath);
+    sessionStorage.removeItem('mywayTries');
+    await setState({ baseline: { targets, oldHrefs } });
+    await log(`📌 已記住目標按鈕 ${targets.length} 顆（排除既有連結 ${oldHrefs.length} 個）`);
+  }
+
+  // 回傳已開放、可點擊的目標按鈕
+  function findActiveButton(baseline) {
+    const { targets = [], oldHrefs = [] } = baseline || {};
+    for (const a of mainButtons()) {
+      const href = a.getAttribute('href');
+      if (!href || href === '#' || a.getAttribute('aria-disabled') === 'true') continue;
+      const path = btnPath(a);
+      if (path === '/' || path.startsWith('/?') || oldHrefs.includes(path)) continue;
+      if (targets.includes(btnKey(a)) || !/COMING SOON/i.test(a.textContent)) return a;
+    }
+    return null;
+  }
+
   // ---------- 搶位主迴圈 ----------
   let running = false;
   async function runBooking() {
@@ -144,6 +211,10 @@
       if (!targetMD) { await log('❌ TARGET_DATE 格式錯誤'); return; }
 
       // 定時開搶
+      const clickMode = String(config.CLICK_MODE ?? 'true').toLowerCase() === 'true';
+      const onProductPage = location.pathname.startsWith('/products/');
+      if (clickMode && !onProductPage && !state.baseline) await recordBaseline();
+
       const t = parseStartAt(config.START_AT, config.PRE_START_SECONDS);
       if (t) {
         const wait = t - Date.now();
@@ -158,17 +229,30 @@
 
       const fixedHandle = handleFromUrl(config.PRODUCT_URL);
       let handle = fixedHandle || null; // 自動模式每次開搶都重新找商品
+      if (!handle && onProductPage && state.stage === 'clicked') handle = handleFromUrl(location.pathname);
       const excluded = []; // 被限購擋下的商品，自動模式下略過
       const qty = Math.max(1, parseInt(config.QUANTITY || '1', 10));
       const interval = Math.max(500, parseInt(config.POLL_INTERVAL_MS || '1500', 10));
-      let tries = 0;
+      let tries = +(sessionStorage.getItem('mywayTries') || 0);
 
       while ((await getState()).state.armed) {
         tries++;
+        sessionStorage.setItem('mywayTries', tries);
+        // 點擊模式：先看畫面上的按鈕，開放了就點
+        if (clickMode && !onProductPage && state.stage !== 'clicked') {
+          const btn = findActiveButton((await getState()).state.baseline);
+          if (btn) {
+            await setState({ stage: 'clicked' });
+            await log(`👆 按鈕已開放，點擊「${btn.textContent.trim()}」→ ${btnPath(btn)}`);
+            btn.click();
+            return;
+          }
+        }
+        banner(`${new Date().toLocaleTimeString()} 輪詢中（第 ${tries} 次）\n${handle ? '商品：' + decodeURIComponent(handle) : '等待新商品上架／按鈕開放…'}`);
         try {
           if (!handle) {
-            await log(`🔍 從首頁尋找含 ${targetMD} 的商品…`);
-            handle = await discoverHandle(targetMD, excluded);
+            if (tries === 1) await log(`🔍 尋找含 ${targetMD}${config.PRODUCT_KEYWORD ? `、名稱符合「${config.PRODUCT_KEYWORD}」` : ''} 的商品…`);
+            handle = await discoverHandle(targetMD, excluded, config.PRODUCT_KEYWORD);
             if (handle) { await setState({ handle }); await log(`✅ 找到商品：${decodeURIComponent(handle)}`); }
           }
           if (handle) {
@@ -177,9 +261,15 @@
             if (pick) {
               await log(`🎯 選到 ${pick.title}，加入購物車 x${qty}`);
               await addToCart(pick.id, qty);
-              await setState({ stage: 'checkout', picked: pick.title, submitted: false });
-              await log('🛒 已加入，前往結帳');
-              location.href = '/checkout';
+              if (String(config.SHOW_PRODUCT_PAGE ?? 'true').toLowerCase() === 'true') {
+                await setState({ stage: 'showProduct', picked: pick.title, submitted: false });
+                await log('🛒 已加入，切到商品頁顯示');
+                location.href = `/products/${handle}?variant=${pick.id}`;
+              } else {
+                await setState({ stage: 'checkout', picked: pick.title, submitted: false });
+                await log('🛒 已加入，前往結帳');
+                location.href = '/checkout';
+              }
               return;
             }
             if (tries === 1 || tries % 10 === 0) {
@@ -205,6 +295,11 @@
           await log(`⚠️ ${e.message || e}`);
         }
         await sleep(interval);
+        // 點擊模式：非商品頁就重新整理，讓畫面上的按鈕更新
+        if (clickMode && !onProductPage && !handle && (await getState()).state.armed) {
+          location.reload();
+          return;
+        }
       }
       await log('⏹ 已停止');
     } finally {
@@ -335,6 +430,14 @@
     if (await checkThankYou()) return;
     if (!state.armed) return;
     if (isCheckout()) runCheckout();
+    else if (state.stage === 'showProduct') {
+      // 商品頁停留一下讓使用者看到場次，再進結帳
+      const { config } = await getState();
+      await log(`👀 已選：${state.picked || ''}，${Math.round((+config.SHOW_PRODUCT_MS || 1000) / 100) / 10} 秒後進結帳`);
+      await sleep(Math.max(0, +config.SHOW_PRODUCT_MS || 1000));
+      await setState({ stage: 'checkout' });
+      location.href = '/checkout';
+    }
     else if (state.stage !== 'checkout') runBooking();
     else {
       // stage=checkout 但卻不在結帳頁（可能被導回），重新搶
